@@ -12,8 +12,8 @@ use windows::Wdk::System::Threading::{NtQueryInformationProcess,
                                       };
 use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows::Win32::Foundation::GetLastError;
-use windows::Win32::Foundation::{BOOL, HANDLE};
-use windows::core::{PSTR, PCSTR};
+use windows::Win32::Foundation::{BOOL, HANDLE, UNICODE_STRING};
+use windows::core::{PSTR, PCSTR, PWSTR};
 use core::ffi::c_void;
 
 unsafe fn start_powershell(binary_name: &str, commandline_args: &str, 
@@ -52,7 +52,10 @@ unsafe fn read_process_memory(process_handle: HANDLE, address: *const c_void,
         );
     match process_memory.is_ok() {
             true  => return Ok(()),
-            false => return Err(())
+            false => {
+            println!("{:?}", process_memory);    
+            return Err(())
+            }                
     }       
 }
  
@@ -90,7 +93,6 @@ fn main() {
                 mem_len as u32,   //  [in] ULONG ProcessInformationLength,
                 return_length,                      //  [out, optional] PULONG ReturnLength
         );
-
         match status.is_ok() {
             true => {
                 println!("Location of PEB: {:?}", &process_information.PebBaseAddress);
@@ -105,20 +107,55 @@ fn main() {
         let peb_len = std::mem::size_of::<PEB>();
         let mut bytes_read: usize = 0;
         
-        
         let peb_content = read_process_memory(process_handle.clone().unwrap(),
                                                  peb_addr,
                                                  buffer_ptr,
                                                  peb_len,
                                                  &mut bytes_read); 
         match peb_content {
-            Ok(_) => println!("Success."),
-            Err(_) => eprintln!("Failure")
+            Ok(_) => println!("Success fetching PEB content. Length: {bytes_read}"),
+            Err(_) => eprintln!("Failure fetching PEB content.")
         }
+        println!("Location of commandline arguments: {:?}", &peb.ProcessParameters);
+        
+        let cli_addr: *const c_void = peb.ProcessParameters as *const _ as *const c_void;
+        let cli_len = std::mem::size_of::<RTL_USER_PROCESS_PARAMETERS>();
+        let mut bytes_read: usize = 0;
+        let mut user_process_params = RTL_USER_PROCESS_PARAMETERS::default();
+        let mut buffer_ptr = &mut user_process_params as *mut _ as *mut c_void;
+
+        let commandline_arguments = read_process_memory(process_handle.clone().unwrap(),
+                                                       cli_addr,
+                                                       buffer_ptr,
+                                                       cli_len,
+                                                       &mut bytes_read
+                                                       );
+        match commandline_arguments {
+            Ok(_) => println!("Success fetching commandline arguments. Length: {bytes_read}"),
+            Err(_) => eprintln!("Failure fetching commandline arguments.")
+        }
+        let commandline_ptr = user_process_params.CommandLine as UNICODE_STRING; 
+
+        let arg_len = commandline_ptr.Length as usize;
+        let arg_addr: *const c_void = commandline_ptr.Buffer.0 as *const _ as *const c_void;
+        let mut bytes_read: usize = 0;
+        let mut string_contents = vec![0u16; arg_len];
+        let buffer_ptr = &mut string_contents  as *mut _ as *mut c_void;
+        println!("Location of string: {:?}", arg_addr);
+        let commandline_arguments = read_process_memory(process_handle.clone().unwrap(),
+                                                       arg_addr,
+                                                       buffer_ptr,
+                                                       arg_len,
+                                                       &mut bytes_read
+                                                       );
+        match commandline_arguments {
+            Ok(_) => println!("Success fetching string. Length: {bytes_read}"),
+            Err(_) => eprintln!("Failure fetching string  arguments.")
+        }
+        println!("Contents of string: {:?}", String::from_utf16(&string_contents)); 
 
 
- 
-
+        
         
     }
 }
