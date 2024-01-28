@@ -7,6 +7,7 @@ use windows::Win32::System::Threading::{CreateProcessA,
 use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows::Win32::Foundation::BOOL;
 use windows::core::{PSTR, PCSTR};
+use core::ffi::c_void;
 
 
 fn main() {
@@ -18,7 +19,7 @@ fn main() {
         let mut startup_info = STARTUPINFOA::default();
         let mut process_information = PROCESS_INFORMATION::default();
 
-        let result = CreateProcessA(
+        let _result = CreateProcessA(
             PCSTR::null(),      
             PSTR("powershell sleep 10\0".as_ptr() as _ ),   // Command line
             None,                                           // Process security attributes
@@ -38,19 +39,21 @@ fn main() {
         // Let's open a process handle:
         let process_handle = OpenProcess(
             process_access_rights, // [in] DWORD dwDesiredAccess,
-            BOOL(0), // [in] BOOL  bInheritHandle,
-            id// [in] DWORD dwProcessId
+            BOOL(0),    // [in] BOOL  bInheritHandle,
+            id          // [in] DWORD dwProcessId
           );
-        let base_addr: *const c_void; // fix
-        /*
-        let process_memory = ReadProcessMemory(
-            process_handle ,// [in]  HANDLE  hProcess,
-            0, // [in]  LPCVOID lpBaseAddress,
-            // [out] LPVOID  lpBuffer,
-            // [in]  SIZE_T  nSize,
-            // [out] SIZE_T  *lpNumberOfBytesRead
+        let base_address = 0x7ff6_0000 as *const c_void; // fix
+        let lp_buffer = 0x0 as *mut c_void;
+        let lp_number_of_bytes_read: Option<*mut usize> = None;
 
-        );*/
+        let process_memory = ReadProcessMemory(
+            process_handle.unwrap() ,// [in]  HANDLE  hProcess,
+            base_address, // [in]  LPCVOID lpBaseAddress,
+            lp_buffer,// [out] LPVOID  lpBuffer,
+            4 as usize,// [in]  SIZE_T  nSize,
+            lp_number_of_bytes_read// [out] SIZE_T  *lpNumberOfBytesRead
+        );
+        println!("{:?}", process_memory);
         
     }
 }
