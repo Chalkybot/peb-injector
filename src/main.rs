@@ -6,11 +6,12 @@ use windows::Win32::System::Threading::{CreateProcessA,
                                         PROCESS_ACCESS_RIGHTS,
                                         PROCESS_BASIC_INFORMATION,
                                         PEB,
-                                        RTL_USER_PROCESS_PARAMETERS};
+                                        RTL_USER_PROCESS_PARAMETERS,
+                                        ResumeThread};
 use windows::Wdk::System::Threading::{NtQueryInformationProcess,
                                       PROCESSINFOCLASS,
                                       };
-use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
 use windows::Win32::Foundation::GetLastError;
 use windows::Win32::Foundation::{BOOL, HANDLE, UNICODE_STRING};
 use windows::core::{PSTR, PCSTR, PWSTR};
@@ -27,7 +28,7 @@ unsafe fn start_powershell(binary_name: &str, commandline_args: &str,
             None,                                           // Process security attributes
             None,                                           // Thread security attributes
             BOOL(0),                                        // Inherit handles
-            PROCESS_CREATION_FLAGS(0),                      // Creation flags -> 0x00000004 is suspended mode.
+            PROCESS_CREATION_FLAGS(0x00000004),                      // Creation flags -> 0x00000004 is suspended mode.
                                                             // When creating the process in suspended mode, it does not
                                                             // show up in taskmgr?
             None,                                           // Environment
@@ -41,20 +42,44 @@ unsafe fn start_powershell(binary_name: &str, commandline_args: &str,
     }
 }
 
+
+unsafe fn write_process_memory<T>(process_handle: HANDLE, address: *const c_void, 
+                                buffer: &T, length: usize) -> Result<(),()> {
+    let mut bytes_written: usize = 0;
+    let buffer_ptr: *const c_void = buffer as *const _ as *const c_void;
+    let process_memory = WriteProcessMemory(
+        process_handle,
+        address,
+        buffer_ptr,
+        length,
+        Some(&mut bytes_written)
+    );
+    match process_memory.is_ok() {
+            true  => return Ok(()),
+            false => {
+                println!("{:?}", process_memory);    
+                return Err(())
+            }                
+    }       
+
+}
+
 unsafe fn read_process_memory(process_handle: HANDLE, address: *const c_void,
-                              buffer_ptr: *mut c_void, length: usize, bytes_read: &mut usize) -> Result<(),()> {
+                              buffer_ptr: *mut c_void, length: usize) -> Result<(),()> {
+    let mut bytes_read: usize = 0;
     let process_memory = ReadProcessMemory(
                 process_handle,
                 address,
                 buffer_ptr,
                 length,
-                Some(bytes_read),
-        );
+                Some(&mut bytes_read),
+    );
+
     match process_memory.is_ok() {
             true  => return Ok(()),
             false => {
-            println!("{:?}", process_memory);    
-            return Err(())
+                println!("{:?}", process_memory);    
+                return Err(())
             }                
     }       
 }
@@ -69,8 +94,8 @@ fn main() {
     unsafe {
         let mut startup_info = STARTUPINFOA::default();
         let mut process_information = PROCESS_INFORMATION::default();
-        start_powershell("powershell", "sleep 10", &mut process_information, &startup_info);
-
+        start_powershell("powershell", "echo 0", &mut process_information, &startup_info);
+        let thread_handle = process_information.hThread;
         let id = process_information.dwProcessId; 
         println!("Process ID: {:?}", id);
 
@@ -97,65 +122,59 @@ fn main() {
             true => {
                 println!("Location of PEB: {:?}", &process_information.PebBaseAddress);
         },
-            false => eprintln!("Failure: {:?}", status)
+            false => panic!("Failure: {:?}", status)
         }
        
         // Reading PEB
         let peb_addr: *const c_void = process_information.PebBaseAddress as *const _ as *const c_void;
-        let mut peb = PEB::default();
-        let mut buffer_ptr = &mut peb as *mut _ as *mut c_void;
+        let mut peb_buffer = PEB::default();
+        let peb_ptr: *mut c_void = &mut peb_buffer as *mut _ as *mut c_void; 
         let peb_len = std::mem::size_of::<PEB>();
-        let mut bytes_read: usize = 0;
+        let peb_content = read_process_memory(  process_handle.clone().unwrap(),
+                                                peb_addr,
+                                                peb_ptr,
+                                                peb_len); 
+        // Todo:
+        // Match peb_content
+        // If it's Ok() -> bytes_read should be assigned 
+
+        println!("Location of commandline arguments: {:?}", &peb_buffer.ProcessParameters);
         
-        let peb_content = read_process_memory(process_handle.clone().unwrap(),
-                                                 peb_addr,
-                                                 buffer_ptr,
-                                                 peb_len,
-                                                 &mut bytes_read); 
-        match peb_content {
-            Ok(_) => println!("Success fetching PEB content. Length: {bytes_read}"),
-            Err(_) => eprintln!("Failure fetching PEB content.")
-        }
-        println!("Location of commandline arguments: {:?}", &peb.ProcessParameters);
-        
-        let cli_addr: *const c_void = peb.ProcessParameters as *const _ as *const c_void;
-        let cli_len = std::mem::size_of::<RTL_USER_PROCESS_PARAMETERS>();
-        let mut bytes_read: usize = 0;
-        let mut user_process_params = RTL_USER_PROCESS_PARAMETERS::default();
-        let mut buffer_ptr = &mut user_process_params as *mut _ as *mut c_void;
+        let process_params_addr: *const c_void = peb_buffer.ProcessParameters as *const _ as *const c_void;
+        let mut process_params_buffer = RTL_USER_PROCESS_PARAMETERS::default();
+        let process_params_ptr: *mut c_void = &mut process_params_buffer as *mut _ as *mut c_void;
+        let process_params_len = std::mem::size_of::<RTL_USER_PROCESS_PARAMETERS>();
 
         let commandline_arguments = read_process_memory(process_handle.clone().unwrap(),
-                                                       cli_addr,
-                                                       buffer_ptr,
-                                                       cli_len,
-                                                       &mut bytes_read
-                                                       );
-        match commandline_arguments {
-            Ok(_) => println!("Success fetching commandline arguments. Length: {bytes_read}"),
-            Err(_) => eprintln!("Failure fetching commandline arguments.")
-        }
-        let commandline_ptr = user_process_params.CommandLine as UNICODE_STRING; 
+                                                       process_params_addr,
+                                                       process_params_ptr,
+                                                       process_params_len);
+         // Todo:
+        // Match peb_content
+        // If it's Ok() -> bytes_read should be assigned 
 
-        let arg_len = commandline_ptr.Length as usize;
-        let arg_addr: *const c_void = commandline_ptr.Buffer.0 as *const _ as *const c_void;
-        let mut bytes_read: usize = 0;
-        let mut string_contents = vec![0u16; arg_len];
-        let buffer_ptr = &mut string_contents  as *mut _ as *mut c_void;
-        println!("Location of string: {:?}", arg_addr);
+        let commandline_len = process_params_buffer.CommandLine.Length as usize;
+        let commandline_addr: *const c_void = process_params_buffer.CommandLine
+                                                                    .Buffer
+                                                                    .0 as *const _ as *const c_void;
+        let mut commandline_buffer = vec![0u16; commandline_len / 2 + 1 ]; // account for utf16 + \0
+        let commandline_ptr: *mut c_void = &mut *commandline_buffer as *mut _ as *mut c_void; 
+        println!("Location of string: {:?}", commandline_addr);
         let commandline_arguments = read_process_memory(process_handle.clone().unwrap(),
-                                                       arg_addr,
-                                                       buffer_ptr,
-                                                       arg_len,
-                                                       &mut bytes_read
-                                                       );
-        match commandline_arguments {
-            Ok(_) => println!("Success fetching string. Length: {bytes_read}"),
-            Err(_) => eprintln!("Failure fetching string  arguments.")
-        }
-        println!("Contents of string: {:?}", String::from_utf16(&string_contents)); 
+                                                       commandline_addr,
+                                                       commandline_ptr,
+                                                       commandline_len,); 
+        let replacement_string = [112u16, 111u16, 119u16, 101u16, 114u16, 115u16, 104u16, 101u16, 108u16, 108u16, 32u16, 101u16, 99u16, 104u16, 111u16, 32u16, 49u16, 0u16];
+
+        let overwriting_peb = write_process_memory(
+                process_handle.clone().unwrap(),
+                commandline_addr,
+                &replacement_string,
+                replacement_string.len() * 2,
+        );
+        println!("Return: {:?}", overwriting_peb); 
+        let unsuspend = ResumeThread(thread_handle);
 
 
-        
-        
     }
 }
