@@ -12,7 +12,7 @@ This tool is designed to manipulate the command line arguments of Windows binari
 ## Usage
 Just run the binary with the target process and the desired command line arguments.
    ```
-   peb_injection.exe powershell.exe "whoami"
+   peb-injector.exe powershell.exe "whoami"
    ```
 ## Important Note
 - Use this tool responsibly and ethically. It is meant for educational and testing purposes only.
