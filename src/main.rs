@@ -12,10 +12,9 @@ use windows::Wdk::System::Threading::{NtQueryInformationProcess,
                                       PROCESSINFOCLASS,};
 use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
 use windows::Win32::Foundation::{BOOL, HANDLE};
-use windows::core::{PSTR, PCSTR, Error, IntoParam};
+use windows::core::{PSTR, PCSTR, Error};
 use core::ffi::c_void;
 use std::env;
-use std::{thread, time};
 
 
 trait AsCVoid {
@@ -133,7 +132,8 @@ fn main() {
     start_process(process_name.as_str(),
                     startup_arguments.as_str(), 
                     &mut process_information, 
-                    &startup_info);
+                    &startup_info)
+                    .expect("Unable to launch a process!");
     
     let process_handle = open_process_handle(
                                     ALL_RIGHTS,
@@ -168,11 +168,7 @@ fn main() {
                                                 peb_addr,
                                                 peb_ptr,
                                                 peb_len); 
-        // Todo:
-        // Match peb_content
-        // If it's Ok() -> bytes_read should be assigned 
-
-        println!("Location of commandline arguments: {:?}", &peb_buffer.ProcessParameters);
+        println!("Location of command line arguments: {:?}", &peb_buffer.ProcessParameters);
         
         let process_params_addr = cast_to_cvoid(&*peb_buffer.ProcessParameters);// as *const _ as *const c_void;
         let mut process_params_buffer = RTL_USER_PROCESS_PARAMETERS::default();
@@ -183,9 +179,6 @@ fn main() {
                                                        process_params_addr,
                                                        process_params_ptr,
                                                        process_params_len);
-         // Todo:
-        // Match peb_content
-        // If it's Ok() -> bytes_read should be assigned 
 
         let commandline_len = process_params_buffer.CommandLine.Length as usize;
         let commandline_addr = cast_to_cvoid(&*process_params_buffer.CommandLine
@@ -205,9 +198,6 @@ fn main() {
                 (&*replacement_arguments).as_cvoid(),
                 replacement_arguments.len() * 2,
         );
-        //println!("Return: {:?}", overwriting_peb); 
         let unsuspend = ResumeThread(process_information.hThread);
-        let half_second = time::Duration::from_millis(500); //gonakikka
-        thread::sleep(half_second);
     }
 }
